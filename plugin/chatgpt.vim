@@ -1,31 +1,14 @@
-
+"
 " ChatGPT Vim Plugin
 "
-" Ensure Python3 is available
-if !has('python3')
-  echo "Python 3 support is required for ChatGPT plugin"
-  finish
-endif
-
-" Add ChatGPT dependencies
-python3 << EOF
-import sys
-try:
-    import openai
-except ImportError:
-    print("Error: openai module not found. Install with pip.")
-    raise
-import vim
-import os
-EOF
-
-" Set API key
-python3 << EOF
-openai.api_key = os.getenv('CHAT_GPT_KEY')
-EOF
 
 " Function to show ChatGPT responses in a new buffer (improved)
 function! DisplayChatGPTResponse(response)
+  if empty(a:response)
+    echoerr "Error: response is empty"
+    return
+  endif
+
   let original_syntax = &syntax
 
   new
@@ -38,26 +21,41 @@ function! DisplayChatGPTResponse(response)
   wincmd p
 endfunction
 
-" Function to interact with ChatGPT
-function! ChatGPT(prompt) abort
-  python3 << EOF
-def chat_gpt(prompt):
-  try:
-    response = openai.ChatCompletion.create(
-      model="gpt-3.5-turbo",
-      messages=[{"role": "user", "content": prompt}],
-      max_tokens=1000,
-      stop=None,
-      temperature=0.7,
-    )
-    result = response.choices[0].message.content.strip()
-    vim.command("let g:result = '{}'".format(result.replace("'", "''")))
-  except Exception as e:
-    print("Error:", str(e))
-    vim.command("let g:result = ''")
+function! Ask()
+  let prompt = input('Ask ChatGPT: ')
+  call ChatGPT(prompt)
+  call DisplayChatGPTResponse(g:result)
+endfunction
 
-chat_gpt(vim.eval('a:prompt'))
-EOF
+" ChatGPT are a set of APIs that allow you to interact with OpenAI AI.
+function ChatGPT(prompt)
+	let message = {
+				\ 'role': "user",
+				\ 'content': a:prompt
+				\ }
+
+	let messages = [message]
+
+	let json_payload = {
+				\ 'model': 'gpt-3.5-turbo',
+				\ 'messages': messages,
+				\ 'max_tokens': 256,
+				\ 'temperature': 0.7,
+				\ }
+	
+	let body_raw = json_encode(json_payload)
+	call writefile([body_raw], '/tmp/chatgpt_body_raw.json')
+
+	let cmd = 'curl --silent -X POST -d @/tmp/chatgpt_body_raw.json '
+	let token = getenv('OPENAI_API_KEY')
+	let header = "-H 'Content-Type: application/json' -H 'Authorization: Bearer " . token . "' "
+	let url = 'https://api.openai.com/v1/chat/completions'
+
+	let curl_cmd = cmd . header . url
+	let raw_response = system(curl_cmd)
+	let response = json_decode(raw_response)
+
+	let g:result = response.choices[0].message.content
 endfunction
 
 function! SendHighlightedCodeToChatGPT(ask, line1, line2, context)
@@ -102,17 +100,10 @@ function! SendHighlightedCodeToChatGPT(ask, line1, line2, context)
 endfunction
 
 function! GenerateCommitMessage()
-  " Save the current position and yank register
-  let save_cursor = getcurpos()
-  let save_reg = @@
-  let save_regtype = getregtype('@')
+  " get the diff of the current commit
+  let diff_text = system('git diff --cached --no-untracked-files HEAD')
 
-  " Yank the entire buffer into the unnamed register
-  normal! ggVGy
-
-  " Send the yanked text to ChatGPT
-  let yanked_text = @@
-  let prompt = 'I have the following code changes, can you write a commit message, including a title?\n' . yanked_text
+  let prompt = 'I have the following code changes, can you write a commit message, including a title?\n' . diff_text
   call ChatGPT(prompt)
 
   " Save the current buffer
@@ -132,7 +123,7 @@ function! GenerateCommitMessage()
 endfunction
 "
 " Commands to interact with ChatGPT
-command! -nargs=1 Ask call ChatGPT(<q-args>)
+command! -nargs=0 Ask call Ask()
 command! -range  -nargs=? Explain call SendHighlightedCodeToChatGPT('explain', <line1>, <line2>, <q-args>)
 command! -range Review call SendHighlightedCodeToChatGPT('review', <line1>, <line2>, '')
 command! -range -nargs=? Rewrite call SendHighlightedCodeToChatGPT('rewrite', <line1>, <line2>, <q-args>)
